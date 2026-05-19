@@ -1,0 +1,45 @@
+diff --git a/node_modules/jail-monkey/android/src/main/java/com/gantix/JailMonkey/JailMonkeyModuleImpl.java b/node_modules/jail-monkey/android/src/main/java/com/gantix/JailMonkey/JailMonkeyModuleImpl.java
+index 0508efb..e700fbd 100644
+--- a/node_modules/jail-monkey/android/src/main/java/com/gantix/JailMonkey/JailMonkeyModuleImpl.java
++++ b/node_modules/jail-monkey/android/src/main/java/com/gantix/JailMonkey/JailMonkeyModuleImpl.java
+@@ -95,14 +95,22 @@ public class JailMonkeyModuleImpl {
+ 
+     public static WritableMap rootedDetectionMethods() {
+         RootedCheck rootedCheck = new RootedCheck(context);
+-        Map<String, Object> result = rootedCheck.getResultByDetectionMethod();
++        return toWritableMap(rootedCheck.getResultByDetectionMethod());
++    }
+ 
++    @SuppressWarnings("unchecked")
++    private static WritableMap toWritableMap(Map<String, Object> source) {
+         WritableMap map = Arguments.createMap();
+-
+-        for (Map.Entry<String, Object> entry : result.entrySet()) {
+-            map.putBoolean(entry.getKey(), (Boolean) entry.getValue());
++        for (Map.Entry<String, Object> entry : source.entrySet()) {
++            Object value = entry.getValue();
++            if (value instanceof Boolean) {
++                map.putBoolean(entry.getKey(), (Boolean) value);
++            } else if (value instanceof Map) {
++                map.putMap(entry.getKey(), toWritableMap((Map<String, Object>) value));
++            } else if (value == null) {
++                map.putNull(entry.getKey());
++            }
+         }
+-
+         return map;
+     }
+ 
+diff --git a/node_modules/jail-monkey/specs/NativeJailMonkey.ts b/node_modules/jail-monkey/specs/NativeJailMonkey.ts
+index cefa0a4..6b97b2e 100644
+--- a/node_modules/jail-monkey/specs/NativeJailMonkey.ts
++++ b/node_modules/jail-monkey/specs/NativeJailMonkey.ts
+@@ -11,7 +11,7 @@ export interface Spec extends TurboModule {
+   AdbEnabled(): boolean;
+   isDebuggedMode(): Promise<boolean>;
+   isDevelopmentSettingsMode(): Promise<boolean>;
+-  rootedDetectionMethods?: () => { [key: string]: boolean };
++  rootedDetectionMethods?: () => Object;
+ }
+ 
+ export default TurboModuleRegistry.getEnforcing<Spec>(

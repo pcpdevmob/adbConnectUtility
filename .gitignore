@@ -73,3 +73,27 @@ yarn-error.log
 !.yarn/releases
 !.yarn/sdks
 !.yarn/versions
+
+# Lockfiles (not committed per project policy)
+package-lock.json
+yarn.lock
+
+# Environment / secrets
+.env
+.env.*
+!.env.example
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+.cursor/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Android CMake / NDK (explicit; template has .cxx/ but paths vary)
+android/app/.cxx/
