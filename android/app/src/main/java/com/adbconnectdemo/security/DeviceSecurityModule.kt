@@ -71,6 +71,15 @@ class DeviceSecurityModule(private val reactContext: ReactApplicationContext) :
   }
 
   @ReactMethod
+  fun isEmulator(promise: Promise) {
+    try {
+      promise.resolve(evaluateIsEmulator())
+    } catch (_: Exception) {
+      promise.resolve(false)
+    }
+  }
+
+  @ReactMethod
   fun addListener(eventName: String) {
     // Required for NativeEventEmitter on Android.
   }
@@ -209,7 +218,21 @@ class DeviceSecurityModule(private val reactContext: ReactApplicationContext) :
       putString("usbConfig", usbConfig)
       putString("usbState", usbStateProp)
       putBoolean("adbdRunning", getSystemProperty(PROP_ADBD_SERVICE) == "running")
+      putBoolean("emulator", evaluateIsEmulator())
     }
+  }
+
+  private fun evaluateIsEmulator(): Boolean {
+    return Build.FINGERPRINT.startsWith("generic") ||
+        Build.FINGERPRINT.startsWith("unknown") ||
+        Build.MODEL.contains("google_sdk") ||
+        Build.MODEL.contains("Emulator") ||
+        Build.MODEL.contains("Android SDK built for x86") ||
+        Build.MANUFACTURER.contains("Genymotion") ||
+        (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic")) ||
+        Build.PRODUCT == "google_sdk" ||
+        Build.HARDWARE.contains("goldfish") ||
+        Build.HARDWARE.contains("ranchu")
   }
 
   private fun isDeveloperOptionsEnabled(): Boolean {

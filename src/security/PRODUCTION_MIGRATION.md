@@ -13,8 +13,11 @@ Use this document to port jailbreak/root detection and **active ADB connection**
 | Hook / tamper apps (Android) | `jail-monkey` `hookDetected()` |
 | External storage (Android) | `jail-monkey` `isOnExternalStorage()` |
 | **Active ADB to host** (Android) | Custom `DeviceSecurityModule` (USB + wireless) |
+| **Emulator / Simulator** (Android + iOS) | Custom `DeviceSecurityModule.isEmulator()` |
 
 **Block rule:** total finding score ≥ `100` → block app.
+
+**Emulator rule:** block when running on an Android emulator or iOS Simulator (score 100). Applies in **all builds**, including `__DEV__` — local dev on emulator/simulator will show the block screen; use a physical device for development.
 
 **ADB rule:** block only when the device is **actively connected** to a computer (USB or wireless ADB), not when USB debugging is merely enabled in Settings.
 
@@ -30,9 +33,12 @@ flowchart TD
   hoc --> audit[runSecurityAudit]
   audit --> jm[JailMonkey checks]
   audit --> adb[isAdbConnectedToHost]
-  adb --> native[DeviceSecurityModule.kt]
+  audit --> emu[isEmulator]
+  adb --> native[DeviceSecurityModule]
+  emu --> native
   native --> usb[USB state + sys.usb.config]
   native --> wifi[Wireless ADB ports 5555-5558]
+  native --> sim[Build heuristics / TARGET_OS_SIMULATOR]
   audit --> result[SecurityAuditResult]
   result -->|shouldBlock| prodUI[Your production block UI]
   result -->|pass| mainApp[Your main app]
@@ -47,15 +53,23 @@ flowchart TD
 | Source (this repo) | Destination (production) | Notes |
 |--------------------|--------------------------|-------|
 | `src/security/runSecurityAudit.ts` | e.g. `src/security/runSecurityAudit.ts` | Scoring + all jail-monkey calls. Adjust labels/scores if needed. |
-| `src/security/isAdbConnectedToHost.ts` | same path pattern | Bridge to native module. |
+| `src/security/isAdbConnectedToHost.ts` | same path pattern | Bridge to native module (ADB). |
+| `src/security/isEmulator.ts` | same path pattern | Bridge to native module (emulator). |
 | `src/security/withJailbreakProtection.tsx` | same | **Replace** `SecurityBlockScreen` with your UI (see below). |
 
 ### Required — Android native
 
 | Source | Destination | Notes |
 |--------|-------------|-------|
-| `android/.../security/DeviceSecurityModule.kt` | `android/app/src/main/java/<your.package>/security/` | Change `package` line to your app id. |
+| `android/.../security/DeviceSecurityModule.kt` | `android/app/src/main/java/<your.package>/security/` | Change `package` line to your app id. Includes `isEmulator()`. |
 | `android/.../security/DeviceSecurityPackage.kt` | same folder | Register in `MainApplication`. |
+
+### Required — iOS native
+
+| Source | Destination | Notes |
+|--------|-------------|-------|
+| `ios/.../DeviceSecurityModule.swift` | `ios/<YourApp>/` | Simulator detection via `targetEnvironment(simulator)`. |
+| `ios/.../DeviceSecurityModule.m` | same folder | `RCT_EXTERN_MODULE` bridge. Add both files to Xcode target. |
 
 ### Required — jail-monkey patch
 
@@ -68,7 +82,8 @@ flowchart TD
 | Source | Use |
 |--------|-----|
 | `__tests__/runSecurityAudit.test.ts` | Adapt mocks to your app |
-| `__tests__/isAdbConnectedToHost.test.ts` | Bridge tests |
+| `__tests__/isAdbConnectedToHost.test.ts` | ADB bridge tests |
+| `__tests__/isEmulator.test.ts` | Emulator bridge tests |
 | `__tests__/withJailbreakProtection.test.tsx` | HOC behavior |
 
 ### Do **not** copy (use your own UI)
@@ -145,9 +160,10 @@ npm run android -- --mode release
 
 | Method / event | Type | Purpose |
 |----------------|------|---------|
-| `isAdbConnectedToHost()` | `Promise<boolean>` | Main check used by audit |
-| `getAdbConnectionDiagnostics()` | `Promise<object>` | Debug only (`__DEV__` logs in JS) |
-| `AdbConnectionChanged` | event `{ connected: boolean }` | Re-run audit when connection changes |
+| `isAdbConnectedToHost()` | `Promise<boolean>` | Active ADB to host (Android) |
+| `isEmulator()` | `Promise<boolean>` | Emulator / Simulator detection (Android + iOS) |
+| `getAdbConnectionDiagnostics()` | `Promise<object>` | Debug only (`__DEV__` logs in JS); includes `emulator` on Android |
+| `AdbConnectionChanged` | event `{ connected: boolean }` | Re-run audit when connection changes (Android) |
 
 ---
 
@@ -208,13 +224,14 @@ export async function runSecurityAudit(): Promise<SecurityAuditResult>;
 | `hook-detected` | Hook/tamper apps | 60 |
 | `external-storage` | App on SD card | 25 |
 | **`adb-connected`** | **Active ADB to host** | **100** |
+| **`emulator-detected`** | **Android emulator or iOS Simulator** | **100** |
 
 Two strong root findings (50 + 50) also reach 100. Tune scores/labels for your risk policy.
 
 ### 4.3 Fault tolerance
 
 - Each jail-monkey call wrapped in `safeCall()` — one failure does not kill the audit.
-- Sections run in isolation (`ios` / `android-rootbeer` / `android-adb` / `cross-platform`).
+- Sections run in isolation (`ios` / `android-rootbeer` / `android-adb` / `cross-platform` / `emulator`).
 - HOC **fails open** on fatal audit error (score 0, no block) — logs `[SecurityAudit] fatal error`.
 
 ---
@@ -303,6 +320,8 @@ Run on a **release** build on a physical device.
 | 4 | Unplug cable, kill app, reopen | App usable |
 | 5 | Wireless debugging + paired + active session | Block when `wirelessPath` true in diagnostics |
 | 6 | Rooted device (if you test root) | Block when score ≥ 100 from root findings |
+| 7 | Android emulator or iOS Simulator | Block; finding `emulator-detected` (including `__DEV__`) |
+| 8 | Physical device, no other findings | App usable |
 
 ### Debug logcat
 
@@ -311,7 +330,8 @@ adb logcat | grep -E 'SecurityAudit|DeviceSecurity'
 ```
 
 - After patch: **no** `rootedDetectionMethods threw`
-- In `__DEV__`: `[DeviceSecurity] ADB connection check` with `diagnostics` object
+- In `__DEV__`: `[DeviceSecurity] ADB connection check` with `diagnostics` object (includes `emulator` on Android)
+- In `__DEV__`: `[DeviceSecurity] Emulator check` with `{ emulator: boolean }`
 
 ### Diagnostics (dev)
 
@@ -342,7 +362,8 @@ const d = await getAdbConnectionDiagnostics();
 | Topic | Detail |
 |-------|--------|
 | iOS ADB | No custom module; iOS uses jail-monkey only |
-| Emulator | Often flagged as rooted — bypass in dev if needed |
+| Emulator block | `emulator-detected` (score 100) blocks on AVD and iOS Simulator in all builds; use a physical device for local dev |
+| Emulator heuristics | Android uses `Build.*` patterns; rare OEM devices may false-positive; iOS uses `TARGET_OS_SIMULATOR` |
 | OEM USB | Some devices report USB state differently; diagnostics help triage |
 | Wireless ADB | Port scan is heuristic (5555–5558); unusual ports may be missed |
 | `SystemProperties` | Reflection may be restricted on some builds |
@@ -358,7 +379,8 @@ const d = await getAdbConnectionDiagnostics();
 | Blocked with debugging on, no cable | Using `AdbEnabled()` only | Use `isAdbConnectedToHost()` only |
 | Still blocked after unplug | Stale state / no kill-reopen | Kill app and reopen; check diagnostics |
 | Root checks never run | Patch not applied | `npm install`, verify `patches/` + postinstall |
-| `NativeModules.DeviceSecurityModule` undefined | Package not registered | `DeviceSecurityPackage` in `MainApplication` + rebuild |
+| `NativeModules.DeviceSecurityModule` undefined | Package not registered | Android: `DeviceSecurityPackage` in `MainApplication`; iOS: add `.swift`/`.m` to Xcode target + rebuild |
+| Emulator not blocked on simulator | iOS module not linked | Add `DeviceSecurityModule.swift` + `.m` to app target in Xcode |
 
 ---
 
@@ -370,11 +392,16 @@ From this demo repo root:
 # JS security core
 cp src/security/runSecurityAudit.ts      <PROD>/src/security/
 cp src/security/isAdbConnectedToHost.ts  <PROD>/src/security/
+cp src/security/isEmulator.ts           <PROD>/src/security/
 cp src/security/withJailbreakProtection.tsx <PROD>/src/security/  # then swap UI
 
 # Android native (adjust package name after copy)
 cp android/app/src/main/java/com/adbconnectdemo/security/*.kt \
    <PROD>/android/app/src/main/java/<your/package>/security/
+
+# iOS native (add to Xcode target after copy)
+cp ios/adbConnectDemo/DeviceSecurityModule.swift <PROD>/ios/<YourApp>/
+cp ios/adbConnectDemo/DeviceSecurityModule.m     <PROD>/ios/<YourApp>/
 
 # jail-monkey patch
 mkdir -p <PROD>/patches

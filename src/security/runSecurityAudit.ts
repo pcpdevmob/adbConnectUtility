@@ -1,6 +1,7 @@
 import JailMonkey from 'jail-monkey';
 import { Platform } from 'react-native';
 import { isAdbConnectedToHost } from './isAdbConnectedToHost';
+import { isEmulator } from './isEmulator';
 
 export const SECURITY_BLOCK_THRESHOLD = 100;
 
@@ -248,6 +249,18 @@ async function auditAndroidAdb(findings: SecurityFinding[]): Promise<void> {
   }
 }
 
+async function auditEmulator(findings: SecurityFinding[]): Promise<void> {
+  const emulator = await isEmulator();
+
+  if (emulator) {
+    findings.push({
+      id: 'emulator-detected',
+      label: 'Application is running on an emulator or simulator',
+      score: 100,
+    });
+  }
+}
+
 async function runSection(
   label: string,
   section: () => void | Promise<void>,
@@ -272,6 +285,7 @@ export async function runSecurityAudit(): Promise<SecurityAuditResult> {
   }
 
   await runSection('cross-platform', () => auditCrossPlatform(findings));
+  await runSection('emulator', () => auditEmulator(findings));
 
   return buildResult(findings);
 }

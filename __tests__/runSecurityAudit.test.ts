@@ -5,6 +5,7 @@
 import JailMonkey from 'jail-monkey';
 import { Platform } from 'react-native';
 import { isAdbConnectedToHost } from '../src/security/isAdbConnectedToHost';
+import { isEmulator } from '../src/security/isEmulator';
 import {
   runSecurityAudit,
   SECURITY_BLOCK_THRESHOLD,
@@ -13,6 +14,10 @@ import {
 jest.mock('../src/security/isAdbConnectedToHost', () => ({
   isAdbConnectedToHost: jest.fn(),
   subscribeToAdbConnectionChanges: jest.fn(() => () => {}),
+}));
+
+jest.mock('../src/security/isEmulator', () => ({
+  isEmulator: jest.fn(),
 }));
 
 jest.mock('jail-monkey', () => ({
@@ -45,17 +50,67 @@ jest.mock('jail-monkey', () => ({
 const mockedIsAdbConnectedToHost = isAdbConnectedToHost as jest.MockedFunction<
   typeof isAdbConnectedToHost
 >;
+const mockedIsEmulator = isEmulator as jest.MockedFunction<typeof isEmulator>;
 
 describe('runSecurityAudit', () => {
   const originalPlatform = Platform.OS;
 
   beforeEach(() => {
     mockedIsAdbConnectedToHost.mockResolvedValue(false);
+    mockedIsEmulator.mockResolvedValue(false);
   });
 
   afterEach(() => {
     Object.defineProperty(Platform, 'OS', { configurable: true, value: originalPlatform });
     jest.clearAllMocks();
+  });
+
+  test('blocks on Android when emulator is detected', async () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    mockedIsEmulator.mockResolvedValue(true);
+
+    const result = await runSecurityAudit();
+
+    expect(result.score).toBeGreaterThanOrEqual(SECURITY_BLOCK_THRESHOLD);
+    expect(result.shouldBlock).toBe(true);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'emulator-detected',
+          label: 'Application is running on an emulator or simulator',
+          score: 100,
+        }),
+      ]),
+    );
+  });
+
+  test('blocks on iOS when simulator is detected', async () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'ios' });
+    mockedIsEmulator.mockResolvedValue(true);
+
+    const result = await runSecurityAudit();
+
+    expect(result.score).toBeGreaterThanOrEqual(SECURITY_BLOCK_THRESHOLD);
+    expect(result.shouldBlock).toBe(true);
+    expect(result.findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'emulator-detected',
+          score: 100,
+        }),
+      ]),
+    );
+    expect(mockedIsAdbConnectedToHost).not.toHaveBeenCalled();
+  });
+
+  test('continues audit when isEmulator throws', async () => {
+    Object.defineProperty(Platform, 'OS', { configurable: true, value: 'android' });
+    mockedIsEmulator.mockRejectedValue(new Error('emulator check unavailable'));
+
+    const result = await runSecurityAudit();
+
+    expect(result.shouldBlock).toBe(false);
+    expect(result.findings).toHaveLength(0);
   });
 
   test('does not block when developer settings are off or ADB is not connected', async () => {
